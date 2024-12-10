@@ -9,7 +9,7 @@ void error(char* msg);
 void assertCondition(bool condition, char* errmsg);
 
 // Debugging functions
-void debug(char* str);
+void debug(int level, const char *format, ...);
 void debug_l(char* str, int level);
 
 // Utility functions for parsing whitespace

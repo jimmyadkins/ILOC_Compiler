@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h> 
+#include <string.h>
+#include <stdarg.h>
+
 
 int debugLevel = 0;
 
@@ -23,8 +26,15 @@ void assertCondition(bool condition, char* errmsg) {
     }
 }
 
-void debug(char* str) {
-    debug_l(str, 1);
+void debug(int level, const char *format, ...) {
+    if (level <= debugLevel) {  // Check if the message's level is within the debug level
+        va_list args;
+        va_start(args, format); // Initialize the argument list
+        printf("// ");          // Add the comment prefix
+        vprintf(format, args);  // Print the formatted message
+        printf("\n");           // Add a newline at the end
+        va_end(args);           // Clean up the argument list
+    }
 }
 
 void debug_l(char* str, int level) {
