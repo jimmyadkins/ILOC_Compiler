@@ -20,6 +20,7 @@ void initAllocator(Allocator *allocator, IR *ir, int k) {
     allocator->ir = ir;
     allocator->k = k;
     allocator->live = 0;
+    allocator->lastStore = 0;
     allocator->currentInstructionIndex = 0;
     allocator->nextSpillLocation = spillMemoryBase;
     allocator->maxRegisters = getMaxSR(ir->instructions);
@@ -35,9 +36,6 @@ void initAllocator(Allocator *allocator, IR *ir, int k) {
     allocator->PRnext = (int *)malloc(k * sizeof(int));
     allocator->PRsUsed = (int *)malloc(k * sizeof(int));
     allocator->VRrem = (int *)malloc(ir->count * sizeof(int));
-    allocator->VRspilled = (int *)malloc(ir->count * sizeof(int));
-    allocator->lastStore = (int *)malloc(ir->count * sizeof(int));
-    allocator->lastModified = (int *)malloc(ir->count * sizeof(int));
 
     allocator->freePRsCount = k;
 
@@ -50,9 +48,6 @@ void initAllocator(Allocator *allocator, IR *ir, int k) {
         allocator->VRtoPR[i] = -1;
         allocator->VRtoMemory[i] = -1;
         allocator->VRrem[i] = -1;
-        allocator->VRspilled[i] = 0;
-        allocator->lastStore[i] = -1;
-        allocator->lastModified[i] = -1;
     }
     for (int i = 1; i < k; i++) { // Start at 1 to skip PR0
         allocator->PRtoVR[i] = -1;       
@@ -90,6 +85,7 @@ void computeLastUse(Allocator *allocator) {
     }
     // int SRtoVR[allocator->maxRegisters]; // Map SR to VR
     int currentVR = 0;         // Current virtual register index
+    int lastStore = 0;
     // Initialize last use and SRtoVR
     for (int i = 0; i < allocator->maxRegisters; i++) {
         //lastUse[i] = irCount + 1;
@@ -104,24 +100,26 @@ void computeLastUse(Allocator *allocator) {
             current = current->prev;
             continue;
         }
-
-        updateOperand(&line->dst, i, SRtoVR, lastUse, &currentVR);
+        if (line->opcode == STORE) {
+            lastStore = i;
+        }
+        updateOperand(&line->dst, i, SRtoVR, lastUse, &currentVR, lastStore);
         if (line->dst.sr != -1) {
             SRtoVR[line->dst.sr] = -1;
             //lastUse[line->dst.sr] = irCount + 1;
             lastUse[line->dst.sr] = INT_MAX;
         }
-        updateOperand(&line->src1, i, SRtoVR, lastUse, &currentVR);
-        updateOperand(&line->src2, i, SRtoVR, lastUse, &currentVR);
+        updateOperand(&line->src1, i, SRtoVR, lastUse, &currentVR, lastStore);
+        updateOperand(&line->src2, i, SRtoVR, lastUse, &currentVR, lastStore);
 
         allocator->live = countAlive(allocator->maxRegisters, SRtoVR);
         current = current->prev;
     }
-    printf("CurrentVR: %d\n", currentVR);
+    // printf("CurrentVR: %d\n", currentVR);
 }
 
 
-int updateOperand(Operand *op, int idx, int *SRtoVR, int *lastUse, int *currentVR) {
+int updateOperand(Operand *op, int idx, int *SRtoVR, int *lastUse, int *currentVR, int lastStore) {
     if (op->sr != -1) {
         if (SRtoVR[op->sr] == -1) {
             SRtoVR[op->sr] = (*currentVR)++;
@@ -129,6 +127,7 @@ int updateOperand(Operand *op, int idx, int *SRtoVR, int *lastUse, int *currentV
         op->vr = SRtoVR[op->sr];
         op->nu = lastUse[op->sr];  // Set next use
         lastUse[op->sr] = idx;     // Update last use
+        op->dirty = (op->nu > lastStore) ? 1 : 0;
         return op->vr;
     }
     return -1;
@@ -169,13 +168,13 @@ int GetPR(Allocator *allocator, int vr) {
 
         if (allocator->VRrem[currentVR] != -1) {
             cost = 1; // Rematerializable
-        } else if (allocator->VRspilled[currentVR]) {
-            cost = 3; // Respilled
+        } else if (allocator->VRtoMemory[currentVR] != -1) {
+            cost = 3; // Respilled / Clean
         } else {
             cost = 6; // Dirty
         }
 
-        int score = cost*1 - (allocator->PRnext[pr] - allocator->currentInstructionIndex); // Weighted heuristic
+        int score = cost - (allocator->PRnext[pr] - allocator->currentInstructionIndex); // Weighted heuristic
         debug(1,"PR: %d Score: %d, cost = %d, PRnext: %d", pr, score, cost, allocator->PRnext[pr]);
         if (score < bestScore) {
             bestScore = score;
@@ -185,7 +184,7 @@ int GetPR(Allocator *allocator, int vr) {
 
     if (bestPR == -1) {
         printf("Error: No PR available to spill\n");
-        printAllocatorState(allocator, allocator->ir->count, allocator->k);
+        printAllocatorState(allocator, allocator->ir->count);
         exit(EXIT_FAILURE);
     }
 
@@ -214,17 +213,17 @@ void spillRegister(Allocator *allocator, int vr, int pr) {
         // allocator->freePRs[allocator->freePRsCount++] = pr;
         return; // No need to generate store instructions
     }
-    // if (allocator->VRspilled[vr] && allocator->lastStore[vr] >= allocator->lastModified[vr]) {
-    //     debug(1,"VR%d has been spilled already and is clean, skipping store", vr);
+    if (allocator->VRtoMemory[vr] != -1) {
+        debug(1,"VR%d is a respill or is clean, skipping store", vr);
 
-    //     allocator->VRtoPR[vr] = -1; // Mark VR as no longer in a physical register  
-    //     allocator->PRtoVR[pr] = -1;
-    //     allocator->PRnext[pr] = -1;
-    //     //allocator->freePRs[allocator->freePRsCount++] = pr;
-    //     return; // No need to generate store instructions
-    // }
+        allocator->VRtoPR[vr] = -1; // Mark VR as no longer in a physical register  
+        allocator->PRtoVR[pr] = -1;
+        allocator->PRnext[pr] = -1;
+        //allocator->freePRs[allocator->freePRsCount++] = pr;
+        return; // No need to generate store instructions
+    }
 
-    // if (allocator->lastStore[vr] >= allocator->lastModified[vr]) {
+    // if (allocator->lastLoaded[vr] >= allocator->lastStore) {
     //     debug(1,"VR%d is clean, skipping store", vr);
     //     allocator->VRtoPR[vr] = -1;
     //     allocator->PRtoVR[pr] = -1;
@@ -255,8 +254,8 @@ void spillRegister(Allocator *allocator, int vr, int pr) {
     free(loadi);
     free(store);
 
-    allocator->VRspilled[vr] = 1;
-    allocator->lastStore[vr] = allocator->currentInstructionIndex;
+    // allocator->VRspilled[vr] = 1;
+    // allocator->lastStore[vr] = allocator->currentInstructionIndex;
     allocator->VRtoPR[vr] = -1;
     allocator->PRtoVR[pr] = -1;
     allocator->PRnext[pr] = -1;
@@ -400,23 +399,19 @@ void allocateRegisters(Allocator *allocator) {
             allocator->VRtoMemory[line->dst.vr] = line->src1.imm; 
             allocator->VRrem[line->dst.vr] = line->src1.imm; 
         }
-        // if (line->opcode == LOAD) {
-        //     allocator->VRtoMemory[line->src2.vr] = allocator->VRtoMemory[line->src1.vr]; 
-        //     printf("Src1.imm: %d/n", allocator->VRtoMemory[line->src1.vr]);
-        //     allocator->lastStore[line->src2.vr] = -1;              // Initialize as clean
-        //     allocator->lastModified[line->src2.vr] = index;
-        // }
-        // if (line->opcode == STORE) {
-        //     allocator->lastStore[line->src2.vr] = index;  // Update last store
-        // }
-
+        if (line->opcode == LOAD) {      // Initialize as clean
+            if (!line->dst.dirty) {
+                // printf("Clean value");
+                allocator->VRtoMemory[line->dst.vr] = allocator->VRrem[line->src1.vr];
+            }
+        }
+ 
         for (int i = 0; i < allocator->k; i++) {
             allocator->PRsUsed[i] = 0;
         }
 
         // Handle destination operand (dst)
         if (line->dst.vr != -1) {
-            allocator->lastModified[line->dst.vr] = index;
             //printf("Processing Dst: VR = %d\n", line->dst.vr);
             int pr = GetPR(allocator, line->dst.vr);
             allocator->VRtoPR[line->dst.vr] = pr;
@@ -437,8 +432,8 @@ void allocateRegisters(Allocator *allocator) {
         //     printf("  PR%d -> Next Use: %d\n", pr, allocator->PRnext[pr]);
         // }
         
-        printf("// ");
-        prettyPrintInstructionPRs(line);
+        // printf("// ");
+        // prettyPrintInstructionPRs(line);
         addToIR(&allocator->finalIR, *line);
         // append(allocator->finalIR.instructions, line);
         // allocator->finalIR.count++;
@@ -527,36 +522,36 @@ void printAllocatedIR(Allocator *allocator) {
     }
 }
 
-void printAllocatorState(Allocator *allocator, int vrCount, int k) {
+void printAllocatorState(Allocator *allocator, int vrCount) {
     printf("VRtoPR| ");
     for (int i = 0; i < vrCount; i++) {
         if (allocator->VRtoPR[i] != -1) {
             printf("%d : %d | ", i, allocator->VRtoPR[i]);
         }
     }
-    printf("\nPRtoVR| ");
-    for (int i = 0; i < k; i++) {
-        if (allocator->PRtoVR[i] != -1) {
-            printf("%d : %d | ", i, allocator->PRtoVR[i]);
-        }
-    }
-    printf("\nPRNext| ");
-    for (int i = 0; i < k; i++) {
-        if (allocator->PRnext[i] != -1) {
-            printf("%d : %d | ", i, allocator->PRnext[i]);
-        }
-    }
-    printf("\nfreePr| ");
-    for (int i = 0; i < allocator->freePRsCount; i++) {
-        printf("%d : %d | ", i, allocator->freePRs[i]);
-    }
-    
-    // printf("\nVRtoMemory| ");
-    // for (int i = 0; i < vrCount; i++) {
-    //     if (allocator->VRtoMemory[i] != -1) {
-    //         printf("%d : %d | ", i, allocator->VRtoMemory[i]);
+    // printf("\nPRtoVR| ");
+    // for (int i = 0; i < k; i++) {
+    //     if (allocator->PRtoVR[i] != -1) {
+    //         printf("%d : %d | ", i, allocator->PRtoVR[i]);
     //     }
     // }
+    // printf("\nPRNext| ");
+    // for (int i = 0; i < k; i++) {
+    //     if (allocator->PRnext[i] != -1) {
+    //         printf("%d : %d | ", i, allocator->PRnext[i]);
+    //     }
+    // }
+    // printf("\nfreePr| ");
+    // for (int i = 0; i < allocator->freePRsCount; i++) {
+    //     printf("%d : %d | ", i, allocator->freePRs[i]);
+    // }
+    
+    printf("\nVRtoMemory| ");
+    for (int i = 0; i < vrCount; i++) {
+        if (allocator->VRtoMemory[i] != -1) {
+            printf("%d : %d | ", i, allocator->VRtoMemory[i]);
+        }
+    }
 
     // printf("\nVRrem| ");
     // for (int i = 0; i < vrCount; i++) {
@@ -572,19 +567,14 @@ void printAllocatorState(Allocator *allocator, int vrCount, int k) {
     //     }
     // }
 
-    printf("\nlastStore| ");
-    for (int i = 0; i < vrCount; i++) {
-        if (allocator->lastStore[i] != -1) {
-            printf("%d : %d | ", i, allocator->lastStore[i]);
-        }
-    }
+    // printf("\nlastStore| %d", allocator->lastStore);
 
-    printf("\nlastModified| ");
-    for (int i = 0; i < vrCount; i++) {
-        if (allocator->lastModified[i] != -1) {
-            printf("%d : %d | ", i, allocator->lastModified[i]);
-        }
-    }
+    // printf("\nlastLoaded| ");
+    // for (int i = 0; i < vrCount; i++) {
+    //     if (allocator->lastLoaded[i] != -1) {
+    //         printf("%d : %d | ", i, allocator->lastLoaded[i]);
+    //     }
+    // }
     printf("\n");
 }
 

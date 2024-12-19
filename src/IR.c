@@ -28,15 +28,18 @@ void initIRLine(IRLine *line) {
     line->src1.vr = -1;
     line->src1.nu = INT_MAX; // Represents "no next use"
     line->src1.imm = 0;
+    line->src1.dirty = 1;
 
     line->src2.sr = -1;
     line->src2.vr = -1;
     line->src2.nu = INT_MAX;
     line->src2.imm = 0;
+    line->src2.dirty = 1;
 
     line->dst.sr = -1;
     line->dst.vr = -1;
     line->dst.nu = INT_MAX;
+    line->dst.dirty = 1;
 }
 
 

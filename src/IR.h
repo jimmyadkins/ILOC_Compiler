@@ -12,6 +12,7 @@ typedef struct Operand {
     int imm;        // Immediate value (if any)
     int nu;         // Next use
     int spilled;    // Flag indicating if this operand is spilled to memory
+    int dirty;      // indicates if this operand's next use is dirty (has a store between loads)
 } Operand;
 
 // IRLine structure

@@ -17,13 +17,12 @@ typedef struct Allocator {
     int *freePRs;
     int *PRsUsed;
     int *VRrem;
-    int *VRspilled;
-    int *lastStore;
-    int *lastModified;
+    int *lastLoaded;
     int freePRsCount;
     int nextSpillLocation;
     int k;
     int live;
+    int lastStore;
     int currentInstructionIndex;
 } Allocator;
 
@@ -44,7 +43,7 @@ void computeLastUse(Allocator *allocator);
  * Updates the last use and assigns virtual registers for an operand.
  * Used during the last-use computation phase.
  */
-int updateOperand(Operand *op, int idx, int *SRtoVR, int *lastUse, int *currentVR);
+int updateOperand(Operand *op, int idx, int *SRtoVR, int *lastUse, int *currentVR, int lastStore);
 
 /**
  * Allocates physical registers for each instruction in the IR.
@@ -81,6 +80,6 @@ void processOperand(Allocator *allocator, Operand *op);
 int countAlive(int maxRegisters, int *SRtoVR);
 // int isCleanValue(Allocator *allocator, int vr, int currentInstruction);
 
-void printAllocatorState(Allocator *allocator, int vrCount, int k);
+void printAllocatorState(Allocator *allocator, int vrCount);
 
 #endif // ALLOCATOR_H
