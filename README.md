@@ -49,11 +49,13 @@ Values that are spilled are stored to an area of memory dedicated to spilling, a
 #### Clean Value Tracking
 load instructions retrieve a value at a memory location and store it in a register. User memory is memory that the user directly accesses in the original code, not memory used for spilling. A clean value is the result of a load instruction from user memory that meets two conditions: the memory location is known, and the location has not been modified (dirtied) by a store to that location before it’s next use. When you can ensure both conditions, we can replace 6 cycles of work with 3 by not storing the value and instead reloading it from user memory. To do this, we first must label VRs as ‘dirty’ or not. This required adding a ‘dirty’ field to operands, and when we are calculating next use we will mark a VR as ‘dirty’ if there is a store operation between it and it’s next use. Then, when the allocation code we can set its VRtoMemory to the rematerializable (known) value of it’s user memory location.
 
-
-
-
-Final report:
 ## References
 Cooper, Keith D., and Linda Torczon. “Register Allocation.” Engineering a Compiler, 2nd ed., vol. 1, Morgan Kaufmann, San Francisco, CA, 2011, pp. 679–723.
 
 Testing utilities provided by Seth Fogarty of Trinity University.
+
+
+
+Final report: [Allocator Report.pdf](https://github.com/user-attachments/files/18190933/Allocator.Report.pdf)
+
+
